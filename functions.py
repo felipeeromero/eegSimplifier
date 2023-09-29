@@ -2,6 +2,16 @@ import numpy as np
 import math
 
 def digitalize(sensor, value):
+    """
+    Digitalize a sensor reading based on the sensor type.
+    
+    Args:
+        sensor (str): The sensor type.
+        value (float): The sensor reading.
+    
+    Returns:
+        uint8: The digitalized value.
+    """
     Vcc = 3
     if "SpO2" not in sensor: 
         sensor = sensor[:-1]
@@ -22,15 +32,38 @@ def digitalize(sensor, value):
             return value
 
 def reduce_time_size(times, freq_m, freq_obj):
+    """
+    Reduce the time array size based on frequency.
+
+    Args:
+        times (ndarray): The input time array.
+        freq_m (float): Sampling frequency of the original data.
+        freq_obj (float): Target frequency for reduction.
+
+    Returns:
+        ndarray: The reduced time array.
+    """
     indices = np.arange(0, len(times), int((freq_m // freq_obj)))
     return times[indices]
 
-def compute_windowed_fft_cpu(input_data, freq_m, freq_obj, freqs = [50, 100, 150]):
+def compute_windowed_fft_cpu(input_data, freq_m, freq_obj, freqs=[50, 100, 150]):
+    """
+    Compute the windowed FFT of input data.
+
+    Args:
+        input_data (ndarray): Input data array.
+        freq_m (float): Sampling frequency of the input data.
+        freq_obj (float): Target frequency for FFT computation.
+        freqs (list): List of frequencies for FFT computation.
+
+    Returns:
+        ndarray: The computed FFT data.
+    """
     num_samples = input_data.shape[1]
     num_var = input_data.shape[0]
-    window_size = round(freq_m/freq_obj)
+    window_size = round(freq_m / freq_obj)
     num_freqs = len(freqs)
-    output_data_size = math.ceil(num_samples / window_size)  * num_var * num_freqs
+    output_data_size = math.ceil(num_samples / window_size) * num_var * num_freqs
     output_data = np.empty(output_data_size, dtype=np.float32)
 
     for v in range(num_var):
@@ -48,6 +81,17 @@ def compute_windowed_fft_cpu(input_data, freq_m, freq_obj, freqs = [50, 100, 150
     return output_data
 
 def resample_cpu(input_data, freq_m, freq_obj):
+    """
+    Resample input data based on frequencies.
+
+    Args:
+        input_data (ndarray): Input data array.
+        freq_m (float): Sampling frequency of the input data.
+        freq_obj (float): Target frequency for resampling.
+
+    Returns:
+        ndarray: The resampled data.
+    """
     num_samples = input_data.shape[1]
     num_var = input_data.shape[0]
     output_data_size = math.ceil(num_samples * freq_obj / freq_m * 2 * num_var)
