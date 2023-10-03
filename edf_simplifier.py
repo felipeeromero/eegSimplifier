@@ -6,6 +6,7 @@ import argparse
 
 # For dealing with the EDF files
 import mne
+import pyedflib
 import datetime
 import pytz
 
@@ -185,24 +186,43 @@ if (device != 'cpu' and device != 'gpu'):
     speedup = execution_time_cpu/execution_time_gpu
     print("Speedup: {}{}{}".format(bcolors.OKCYAN, speedup, bcolors.ENDC)) 
 
+
+print('\nSaving results into an EDF file...')
+start_time = datetime.datetime.now()
 new_ch_names = []
 new_data = []
 num_freqs = len(freqs)
+
 for var, lab in enumerate(signal_labels):
     for i, f in enumerate(freqs):
-        new_ch_names.append(lab+'_{}'.format(f))
-        new_data.append(output_data[var*math.ceil(len(output_data)/(data.shape[0]))+i:(var+1)*math.ceil(len(output_data)/(data.shape[0])):num_freqs])
+        new_ch_names.append(f'{lab}_{f}')
+        new_data.append(
+            output_data[var * math.ceil(len(output_data) / data.shape[0]) + i:(var + 1) * math.ceil(len(output_data) / data.shape[0]):num_freqs]
+        )
 
-info = mne.create_info(ch_names=new_ch_names, sfreq=target_rate)
-output_data /= sampling_rate
-# Create an MNE Raw object
-raw = mne.io.RawArray(new_data, info)
-raw.set_meas_date(local_time)
-raw.set_annotations(annotations)
+# Crear un objeto EdfWriter
+output_path = f'./output/{output_name}.edf'
+n_channels = len(new_ch_names)
+n_samples = len(new_data[0])
+with pyedflib.EdfWriter(output_path, n_channels) as writer:
+    # Agregar información de los canales
+    for i, channel_name in enumerate(new_ch_names):
+        writer.setLabel(i, channel_name)  # Establecer el nombre del canal
+        writer.setSamplefrequency(i, target_rate)
 
-output_path = "./output/"+output_name+".edf"
-# Save the EEG data as an EDF file
-# raw.save(output_path, overwrite=True)
-mne.export.export_raw(output_path, raw, overwrite=True)
+    # Configurar la fecha de medida
+    # meas_date_str = local_time.strftime("%d %m %Y %H:%M:%S")
+    writer.setStartdatetime(local_time)
+
+    for onset, duration, description in zip(annotations.onset, annotations.duration, annotations.description):
+        writer.writeAnnotation(onset, duration, description)
+
+    writer.writeSamples(new_data)
+
+    writer.close()
+
+end_time = datetime.datetime.now()
+execution_time = end_time - start_time
+print(bcolors.OKCYAN+"Done"+bcolors.ENDC+". ({} seconds)\n".format(execution_time.total_seconds()))
 
 print(f'Saved EEG data to {output_path}')
