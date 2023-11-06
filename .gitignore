@@ -1,3 +1,6 @@
 example.edf
 *.ipynb
 *.eps
+/img/*
+*.pyc
+/input/*

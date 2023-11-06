@@ -1,10 +1,11 @@
     #include <stdio.h>
     #include <math.h>
+    #include <stdint.h>
     // #include <cuComplex.h>
     // #include <cuda.h>
     // #include <cuda_runtime.h>
     
-    const int winSize = 512; // Size of the FFT window
+    const int winSize = 256; // Size of the FFT window
 
 
 extern "C" {
@@ -248,4 +249,89 @@ extern "C" {
             }
         }
     }
+
+
+
+    /**
+     * @brief Compute Windowed Fast Fourier Transform (FFT)
+     *
+     * This CUDA kernel computes the windowed Fast Fourier Transform (FFT) of the input data 'inputData'
+     * and stores the result in 'outputData'. The FFT is computed using a sliding window approach
+     * on the input data.
+     *
+     * @param[in] inputData   Pointer to the input data to be processed.
+     * @param[out] outputData Pointer to the output data where FFT results will be stored.
+     * @param[in] numSamples  The total number of samples in the input data per variable.
+     * @param[in] numVariables The number of variables or signals in the input data.
+     * @param[in] freq_m      The reference frequency used for FFT computation.
+     * @param[in] freqs       An array of integer frequencies to compute FFT at.
+     * @param[in] winSize     The size of the window for FFT computation.
+     *
+     * The function is executed as a CUDA kernel where each thread processes a portion of the data.
+     * The parameters 'blockIdx', 'blockDim', and 'threadIdx' are used to determine the thread's
+     * position within the grid of threads.
+     *
+     * The kernel operates as follows:
+     * 1. Each thread calculates its 'idx' (index of the window) and 'var' (variable) based on its block and thread IDs.
+     * 2. It iterates over 'numVariables', processing data for each variable.
+     * 3. It computes 'outputOffset' to determine the starting index in the 'outputData' array.
+     * 4. For each variable, it iterates over 'numSamples', processing data in chunks of 'winSize'.
+     * 5. Within each chunk, it calculates a range, 'startIdx' and 'endIdx', to select a subarray
+     *    of data centered at the current position 'i'.
+     * 6. It dynamically allocates memory for 'windowData'.
+     * 7. The FFT is applied to 'windowData'.
+     * 8. The absolute values of FFT components are calculated.
+     * 9. The FFT results for the specified frequencies ('freqs') are stored in 'outputData'.
+     * 10. Memory cleanup is performed by deallocating 'windowData'.
+     */
+    __global__ void compute_windowed_fft_v2(float *inputData, unsigned char *outputData, int numSamples, int numVariables, int freq_m, int *freqs, float ref, int numFreqs) {
+        // Calculate the number of frequencies
+        // int numFreqs = sizeof(freqs) / sizeof(freqs[0]);
+
+        // This kernel computes the windowed FFT of 'inputData' and stores it in 'outputData'.
+        // Step 1: Select a window for each thread
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int var = blockIdx.y * blockDim.y + threadIdx.y;
+        int f = blockIdx.z * blockDim.z + threadIdx.z;
+        int stride_x = blockDim.x * gridDim.x * winSize;
+        int stride_y = blockDim.y * gridDim.y;
+
+        // Step 2: Iterate if the number of variables exceeds the grid size
+        for (int v = var; v < numVariables; v += stride_y) {
+            // Step 3: starting index in the output array
+            // int outputOffset = static_cast<int>(ceil((float)numSamples / (float)winSize));
+
+            // Step 4: Iterate if the number of samples exceeds the grid size
+            for (int i = v * numSamples + idx * winSize; i < (v + 1) * numSamples; i += stride_x) {
+                int outputOffset = idx*numVariables*numFreqs;
+                // Step 5: Determine the indexes to select a specific window
+                int range = winSize / 2;
+                int startIdx = (i - range > v * numSamples) ? i - range : v * numSamples;
+                int endIdx = (i + range < (v + 1) * numSamples - 1) ? i + range : (v + 1) * numSamples;
+
+                // Step 6: Dynamically allocate memory for windowData
+                Complex windowData[winSize];
+                select_subarray(inputData, windowData, startIdx, endIdx, i, winSize);
+                // Step 7: windowed FFT computation
+                fft(windowData, winSize);
+
+                // Step 8: Absolute value of the FFT
+                for (int j = 0; j < winSize / 2 + 1; j++) {
+                    windowData[j].x = sqrt(windowData[j].x * windowData[j].x + windowData[j].y * windowData[j].y);
+                    windowData[j].y = 0.0f;
+                }
+
+                // Step 9: Selection of the amplitudes of the desired frequencies
+                if  (f < numFreqs) {
+                    int i_freq = freqs[f] * winSize / freq_m;
+                    unsigned char value = windowData[i_freq].x/ref*255;
+                    outputData[outputOffset + v*numFreqs + f] = value;
+                }
+
+                // Step 10: Memory cleanup
+                // delete[] windowData;
+            }
+        }
+    }
+
 }

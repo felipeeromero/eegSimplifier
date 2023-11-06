@@ -85,7 +85,7 @@ def compute_windowed_fft_gpu(input_data, freq_m, freq_obj, freqs = [50, 100, 150
     if (freq_m/window_size != freq_obj): print(bcolors.WARNING+"WARNING"+ bcolors.ENDC +"The computed output frequency is {} Hz".format(freq_m/window_size))
     return output_data
 
-def resample_cpu(input_data, freq_m, freq_obj):
+def resample_gpu(input_data, freq_m, freq_obj):
     num_samples = input_data.shape[1]
     num_var = input_data.shape[0]
     window_size = round(freq_m/freq_obj)
