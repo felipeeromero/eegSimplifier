@@ -211,6 +211,8 @@ extern "C" {
         // Step 1: Select a window for each thread
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
         int var = blockIdx.y * blockDim.y + threadIdx.y;
+        int f = blockIdx.z * blockDim.z + threadIdx.z;
+
         int stride_x = blockDim.x * gridDim.x * winSize;
         int stride_y = blockDim.y * gridDim.y;
         
@@ -239,9 +241,9 @@ extern "C" {
                 }
                 
                 // Step 9: Selection of the amplitudes of the desired frequencies
-                for (int j = 0; j < numFreqs; j++) {
-                    int i_freq = freqs[j]*winSize/freq_m;
-                    outputData[outputOffset + idx * numFreqs + j] = windowData[i_freq].x;
+                if( f < numFreqs) {
+                    int i_freq = freqs[f]*winSize/freq_m;
+                    outputData[outputOffset + idx * numFreqs + f] = windowData[i_freq].x;
                 }
                 
                 // Step 10: Memory cleanup
@@ -284,7 +286,7 @@ extern "C" {
      * 9. The FFT results for the specified frequencies ('freqs') are stored in 'outputData'.
      * 10. Memory cleanup is performed by deallocating 'windowData'.
      */
-    __global__ void compute_windowed_fft_v2(float *inputData, unsigned char *outputData, int numSamples, int numVariables, int freq_m, int *freqs, float ref, int numFreqs) {
+    __global__ void compute_windowed_fft_v2(float *inputData, float *outputData, int numSamples, int numVariables, int freq_m, int *freqs, int numFreqs) {
         // Calculate the number of frequencies
         // int numFreqs = sizeof(freqs) / sizeof(freqs[0]);
 
@@ -299,11 +301,10 @@ extern "C" {
         // Step 2: Iterate if the number of variables exceeds the grid size
         for (int v = var; v < numVariables; v += stride_y) {
             // Step 3: starting index in the output array
-            // int outputOffset = static_cast<int>(ceil((float)numSamples / (float)winSize));
+            int outputOffset = static_cast<int>(ceil((float)numSamples / (float)winSize) * v * numFreqs);
 
             // Step 4: Iterate if the number of samples exceeds the grid size
             for (int i = v * numSamples + idx * winSize; i < (v + 1) * numSamples; i += stride_x) {
-                int outputOffset = idx*numVariables*numFreqs;
                 // Step 5: Determine the indexes to select a specific window
                 int range = winSize / 2;
                 int startIdx = (i - range > v * numSamples) ? i - range : v * numSamples;
@@ -315,16 +316,16 @@ extern "C" {
                 // Step 7: windowed FFT computation
                 fft(windowData, winSize);
 
-                // Step 8: Absolute value of the FFT
+                 // Step 8: Absolute value of the FFT
                 for (int j = 0; j < winSize / 2 + 1; j++) {
                     windowData[j].x = sqrt(windowData[j].x * windowData[j].x + windowData[j].y * windowData[j].y);
                     windowData[j].y = 0.0f;
                 }
-
+                
                 // Step 9: Selection of the amplitudes of the desired frequencies
                 if  (f < numFreqs) {
                     int i_freq = freqs[f] * winSize / freq_m;
-                    unsigned char value = windowData[i_freq].x/ref*255;
+                    float value = windowData[i_freq].x;
                     outputData[outputOffset + v*numFreqs + f] = value;
                 }
 

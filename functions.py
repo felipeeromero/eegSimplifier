@@ -1,6 +1,7 @@
 import numpy as np
 import math
-
+import re
+import os
 import influxdb_client, os, time
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
@@ -128,26 +129,25 @@ def compute_gpu(kernel, input_data, freq_m, freq_obj, freqs = None):
     print(data_per_window)
 
     output_data_size = math.ceil(num_samples / window_size) * num_var * data_per_window
-    # output_data_size = num_samples * num_var * data_per_window
-    output_data = np.empty(output_data_size, dtype=np.uint8)
+    output_data = np.empty(output_data_size, dtype=np.float32)
     print("Output size: {},".format(len(output_data)),"Input: {} ({}x{}),".format(num_samples*num_var,num_samples,num_var))
 
     # Copy the input data to the GPU
     d_input_data = gpuarray.to_gpu(input_data.flatten().astype(np.float32))
-    d_freqs = gpuarray.to_gpu(np.array(freqs).astype(np.int8))
+    d_freqs = gpuarray.to_gpu(np.array(freqs).astype(np.int32))
     # Create an array for the output data from de GPU
-    d_output_data = gpuarray.empty((output_data_size), dtype=np.uint8)
+    d_output_data = gpuarray.empty((output_data_size), dtype=np.float32)
 
     # Configurar la ejecución del kernel
-    block_size = (64,16)
-    grid_size = (math.ceil(num_samples/window_size + block_size[0] - 1) // block_size[0], math.ceil(num_var+ block_size[1] - 1) // block_size[1])
+    block_size = (32,8,4)
+    grid_size = (math.ceil(num_samples/window_size + block_size[0] - 1) // block_size[0], math.ceil(num_var+ block_size[1] - 1) // block_size[1], 1)
     print("Configuration: <<<{},{}>>>".format(grid_size, block_size))
-    kernel(d_input_data, d_output_data, np.int32(num_samples), np.int32(num_var), np.int32(freq_m), d_freqs, np.int32(window_size),
-                          block=(block_size[0], block_size[1], 1), grid=(grid_size[0], grid_size[1]))
+    kernel(d_input_data, d_output_data, np.int32(num_samples), np.int32(num_var), np.int32(freq_m), d_freqs, np.int32(data_per_window),
+                          block=(block_size[0], block_size[1], block_size[2]), grid=(grid_size[0], grid_size[1], grid_size[2]))
 
-    print(output_data)
     # Copiar los resultados de vuelta a la CPU
     d_output_data.get(output_data)
+    # print(output_data)
     if (freq_m/window_size != freq_obj): print(bcolors.WARNING+"WARNING"+ bcolors.ENDC +"The computed output frequency is {} Hz".format(freq_m/window_size))
     return output_data
 
@@ -164,22 +164,56 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+def extract_session_info(session_text, sessions = {}):
+  """Extracts the sessions from the given text.
+
+  Args:
+    text: A string containing the text of the sessions.
+
+  Returns:
+    A list of dictionaries containing the information about each session.
+  """
+
+  # Extract the session information.
+  file_name = re.search(r'File Name: (.+)\.edf', session_text).group(1)
+  n_seizures_match = re.search(r'Number of Seizures in File: (\d+)', session_text)
+  n_seizures = int(n_seizures_match.group(1))
+  line_start = n_seizures_match.end()+1
+  lines = session_text[line_start:].split('\n')
+  sessions[file_name] = []
+  for i in range(n_seizures):
+    seizure_info = {}
+    seizure_info['seizure_number'] = i+1
+    seizure_info['seizure_start_time'] = int(lines[2*i].split(' ')[-2])
+    seizure_info['seizure_end_time'] = int(lines[2*i+1].split(' ')[-2])
+    sessions[file_name].append(seizure_info)
+
+
+
+  return sessions
+
 def extract_summary(filename):
-    """Extract the patient summary into elements (each element is related to one file).
+  """Extract the information for each session in the text file.
 
-    Args:
-        filename: The file name.
+  Args:
+      filename: The file name.
 
-    Devuelve:
-       A list of the summaries of each session of the patient
-    """
+  Return:
+      A dict with the seizures of each session of the patient
+  """
 
-    lines = []
-    with open(filename, "r") as f:
-        text = f.read()
-        sessions = text.split('\n\n')[2:] # The two firts rows are not needed
+  # Extract the information for each session in the text file.
+  sessions = {}
+  with open(filename, 'r') as f:
+    text = f.read()
+    for i, session_text in enumerate(text.split('\n\n')):
+      if i > 1 and session_text.startswith('File'):
+        # print(session_text)
+        # session_info = extract_session_info(session_text)
+        sessions = extract_session_info(session_text, sessions)
+    f.close()
 
-    return sessions
+  return sessions
 
 def escribir_a_influx(data, bucket = 'raw', url = 'http://localhost:8086', org = 'ual'):
     token = os.environ.get("INFLUX_TOKEN")
@@ -254,3 +288,27 @@ def split_data(matrix, timestamps, channel_names, tags, num_divisions=1000):
 
 
   return packed_data
+
+def normalize_data(data):
+  """
+  Normaliza los datos flotante a entero entre 0 y 255 (int8) teniendo cuidado con los valores atípicos.
+
+  Args:
+    data: Los datos flotante a normalizar.
+
+  Returns:
+    Los datos normalizados en formato int8.
+  """
+
+  minimos_por_canal = np.min(data, axis=1, keepdims=True)  # Añade keepdims=True para mantener la forma (23, 1)
+  maximos_por_canal = np.max(data, axis=1, keepdims=True)
+  # l2_norm = np.linalg.norm(data, 2, axis=1, keepdims=False)
+  
+  norm_data = np.rint((data - minimos_por_canal) / (maximos_por_canal - minimos_por_canal) * 255)
+
+  # print(norm_data)
+  # Convertir los datos a tipo int8
+  norm_data = norm_data.astype(np.uint8)
+  # print(norm_data2-norm_data)
+
+  return norm_data
